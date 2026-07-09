@@ -1,0 +1,207 @@
+#!/usr/bin/env node
+// ocean — deterministic mechanics of the snapshot store (dehydrate/rehydrate/describe).
+// Node stdlib only, baseline Node 18. The model NEVER redraws the tree: this script delivers pre-rendered text.
+// Subcommands:
+//   discover [arg] [--limit N]  -> JSON { ocean, project, counts{snapshots,liveHeads},
+//                                          leaves[{file,date,title,isRoot,neighbourhood}] (newest-first, <=N if --limit), forest, shortcut?{matched,file,lineage} }
+//   show <file>  -> print a snapshot's full content
+//   dehydrate --title <t> --session <sid|-> --today <YYYY-MM-DD> < body  -> write snapshot (naming, collision, parent, registry)
+//   record <session> <file> <today>  -> upsert row in the .ocean-trace.tsv registry
+//   clean --today <YYYY-MM-DD> [--prune]  -> rows older than 30 days: without --prune list them (JSON), with --prune remove them
+
+import { readdirSync, readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, dirname, basename } from "node:path";
+
+// ---- store resolution (env override -> plugin data dir; keyed by git root, or cwd when no git) ----
+function gitRoot(start) {
+  let dir = start;
+  for (;;) {
+    if (existsSync(join(dir, ".git"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+function resolve() {
+  const scope = gitRoot(process.cwd()) || process.cwd();
+  const project = basename(scope);
+  if (process.env.OCEAN_DIR) return { store: process.env.OCEAN_DIR, project };
+  const key = scope.replace(/[^A-Za-z0-9_-]/g, "-");
+  const dataHome = process.env.CLAUDE_PLUGIN_DATA || join(homedir(), ".claude", "plugins", "data", "ocean");
+  return { store: join(dataHome, key), project };
+}
+
+// ---- snapshot loading ----
+function h1(text) {
+  for (const line of text.split("\n")) if (line.startsWith("# ")) return line.slice(2).trim();
+  return null;
+}
+function parentOf(text) {
+  const m = text.match(/^parent:\s*(.+)$/m);
+  return m ? m[1].trim() : null;
+}
+function load(store) {
+  if (!existsSync(store)) return [];
+  const files = readdirSync(store).filter((f) => f.startsWith("dehydrated-") && f.endsWith(".md"));
+  return files.map((f) => {
+    const text = readFileSync(join(store, f), "utf8");
+    const date = (f.match(/(\d{4}-\d{2}-\d{2})/) || [])[1] || "0000-00-00";
+    return { file: f, date, title: h1(text), parent: parentOf(text) };
+  });
+}
+
+const { store, project } = resolve();
+const snaps = load(store);
+const byFile = new Map(snaps.map((s) => [s.file, s]));
+const children = new Map(); // file -> [child snap]
+for (const s of snaps) if (s.parent) (children.get(s.parent) ?? children.set(s.parent, []).get(s.parent)).push(s);
+
+const byDateDesc = (a, b) => b.date.localeCompare(a.date) || a.file.localeCompare(b.file);
+const kidsOf = (s) => (children.get(s.file) || []).slice().sort(byDateDesc);
+const isLeaf = (s) => !children.has(s.file);
+const glyph = (s) => (!s.parent ? "▲" : children.has(s.file) ? "○" : "●");
+const label = (s) => `${s.date} · ${s.title ?? "(untitled snapshot)"}`;
+const nodeLine = (s) => `${glyph(s)} ${label(s)}`;
+
+// ---- tree rendering (forest / lineage) ----
+function renderTree(roots, markFile = null) {
+  const out = [];
+  const walk = (node, prefix, isLast, top) => {
+    let line = top ? nodeLine(node) : prefix + (isLast ? "└─ " : "├─ ") + nodeLine(node);
+    if (markFile && node.file === markFile) line += " « HERE";
+    out.push(line);
+    const kids = kidsOf(node);
+    const childPrefix = top ? "" : prefix + (isLast ? "   " : "│  ");
+    kids.forEach((k, i) => walk(k, childPrefix, i === kids.length - 1, false));
+  };
+  roots.slice().sort(byDateDesc).forEach((r) => walk(r, "", true, true));
+  return out.join("\n");
+}
+const LEGEND = "Legend: ▲ root · ○ node · ● leaf\nInject into the current conversation with /ocean:rehydrate <title>";
+function forest() {
+  const roots = snaps.filter((s) => !s.parent || !byFile.has(s.parent));
+  const heads = snaps.filter(isLeaf).length;
+  const head = `ocean — ${project}   (${snaps.length} snapshots · ${heads} live heads)`;
+  return `${head}\n\n${renderTree(roots)}\n\n${LEGEND}`;
+}
+
+// ---- neighbourhood rendering (for the rehydrate preview) ----
+function neighbourhood(leaf) {
+  if (!leaf.parent || !byFile.has(leaf.parent)) return `**${nodeLine(leaf)}**        « SELECTED`;
+  const p = byFile.get(leaf.parent);
+  const lines = [nodeLine(p)];
+  const sibs = kidsOf(p);
+  sibs.forEach((s, i) => {
+    const branch = i === sibs.length - 1 ? "└─ " : "├─ ";
+    lines.push(s.file === leaf.file ? `${branch}**${nodeLine(s)}**        « SELECTED` : branch + nodeLine(s));
+  });
+  return lines.join("\n");
+}
+
+// ---- lineage root (for describe <arg>) ----
+function rootOf(s) {
+  let r = s, seen = new Set();
+  while (r.parent && byFile.has(r.parent) && !seen.has(r.file)) { seen.add(r.file); r = byFile.get(r.parent); }
+  return r;
+}
+function matchArg(arg) {
+  const q = arg.toLowerCase();
+  const hits = snaps.filter((s) => s.file.toLowerCase().includes(q) || (s.title || "").toLowerCase().includes(q));
+  return hits.length === 1 ? hits[0] : null;
+}
+
+// ---- registry ----
+const REG = join(store, ".ocean-trace.tsv");
+const readReg = () => (existsSync(REG) ? readFileSync(REG, "utf8").split("\n").filter(Boolean) : []);
+const days = (a, b) => {
+  const [ay, am, ad] = a.split("-").map(Number), [by, bm, bd] = b.split("-").map(Number);
+  return (Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000;
+};
+
+// ---- dispatch ----
+const [cmd, ...rest] = process.argv.slice(2);
+const emit = (o) => console.log(JSON.stringify(o, null, 2));
+
+if (cmd === "discover") {
+  const li = rest.indexOf("--limit");
+  const limit = li >= 0 ? parseInt(rest[li + 1], 10) : null;
+  const arg = rest.find((a, i) => !a.startsWith("--") && i !== li + 1);
+  let leaves = snaps.filter(isLeaf).sort(byDateDesc).map((s) => ({
+    file: s.file, date: s.date, title: s.title ?? "(untitled snapshot)",
+    isRoot: !s.parent, neighbourhood: neighbourhood(s),
+  }));
+  if (limit != null && limit >= 0) leaves = leaves.slice(0, limit);
+  const out = {
+    ocean: store, project,
+    counts: { snapshots: snaps.length, liveHeads: snaps.filter(isLeaf).length },
+    leaves, forest: forest(),
+  };
+  if (arg) {
+    const m = matchArg(arg);
+    out.shortcut = m ? { matched: true, file: m.file, lineage: renderTree([rootOf(m)], m.file) } : { matched: false };
+  }
+  emit(out);
+} else if (cmd === "record") {
+  const [sid, file, today] = rest;
+  if (!sid || !file || !today) { console.error("record <session> <file> <today>"); process.exit(1); }
+  const rows = readReg().filter((r) => r.split("\t")[0] !== sid);
+  rows.push(`${sid}\t${file}\t${today}`);
+  mkdirSync(store, { recursive: true });
+  writeFileSync(REG, rows.join("\n") + "\n");
+  emit({ ok: true, registry: REG, rows: rows.length });
+} else if (cmd === "clean") {
+  const today = rest[rest.indexOf("--today") + 1];
+  const prune = rest.includes("--prune");
+  if (!today || rest.indexOf("--today") === -1) { console.error("clean --today <YYYY-MM-DD> [--prune]"); process.exit(1); }
+  const rows = readReg();
+  const parse = (r) => { const [sid, file, date] = r.split("\t"); return { sid, file, date, title: byFile.get(file)?.title ?? null }; };
+  const all = rows.map(parse);
+  const stale = all.filter((r) => days(r.date, today) > 30);
+  if (prune) {
+    const keep = all.filter((r) => days(r.date, today) <= 30);
+    writeFileSync(REG, keep.map((r) => `${r.sid}\t${r.file}\t${r.date}`).join("\n") + (keep.length ? "\n" : ""));
+    emit({ ok: true, removed: stale.length, remaining: keep.length });
+  } else {
+    emit({ total: all.length, staleCount: stale.length, oldest: all.map((r) => r.date).sort()[0] ?? null, stale });
+  }
+} else if (cmd === "dehydrate") {
+  // body on stdin; the caller decides the content, this script does EVERYTHING else (name, parent, file, registry).
+  const flag = (name) => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] : undefined; };
+  const title = flag("--title"), sid = flag("--session"), today = flag("--today");
+  if (!title || !today) { console.error("dehydrate --title <t> --session <sid|-> --today <YYYY-MM-DD> < body"); process.exit(1); }
+  const body = readFileSync(0, "utf8").replace(/^\n+/, "").replace(/\s+$/, "");
+  // name + suffix on collision
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "snapshot";
+  const base = `dehydrated-${today}-${slug}`;
+  let file = `${base}.md`, n = 2;
+  while (existsSync(join(store, file))) { file = `${base}-${n}.md`; n++; }
+  // parent = latest registry row for this session (if any)
+  let parent = null;
+  if (sid && sid !== "-") {
+    const row = readReg().find((r) => r.split("\t")[0] === sid);
+    if (row) parent = row.split("\t")[1] || null;
+  }
+  // compose (parent frontmatter + H1 + body) and write
+  const front = parent ? `---\nparent: ${parent}\n---\n` : "";
+  mkdirSync(store, { recursive: true });
+  writeFileSync(join(store, file), `${front}# ${title}\n\n${body}\n`);
+  // advance the registry (upsert) — only with a valid session_id
+  if (sid && sid !== "-") {
+    const rows = readReg().filter((r) => r.split("\t")[0] !== sid);
+    rows.push(`${sid}\t${file}\t${today}`);
+    writeFileSync(REG, rows.join("\n") + "\n");
+  }
+  emit({ ok: true, path: join(store, file), file, parent });
+} else if (cmd === "show") {
+  // print a snapshot's full content — keeps reads inside the ocean command (single permission surface).
+  // basename() confines the lookup to the store: no path traversal.
+  const file = rest[0];
+  if (!file) { console.error("show <file>"); process.exit(1); }
+  const p = join(store, basename(file));
+  if (!existsSync(p)) { console.error(`not found: ${p}`); process.exit(1); }
+  process.stdout.write(readFileSync(p, "utf8"));
+} else {
+  console.error("usage: ocean discover [arg] [--limit N] | show <file> | dehydrate --title <t> --session <sid|-> --today <date> < body | record <session> <file> <today> | clean --today <date> [--prune]");
+  process.exit(1);
+}
