@@ -52,12 +52,13 @@ This is a navigation aid, not the point of the plugin: the snapshots themselves 
 
 - **Not a code checkpoint.** A snapshot captures the conversation, not your files — git and `/rewind` cover the code.
 - **Not a transcript.** It is the distilled state of the work, not the full log of the session that produced it.
+- **Not long-term memory.** A snapshot is the state of one piece of work at one moment, restored on request — not knowledge that follows you across every session.
 
 ## Design notes
 
-- **Zero permission prompts.** All store I/O — listing, reading, writing — flows through the bundled `ocean` command, pre-approved by the skills that use it. Install and go.
-- **Deterministic mechanics, model-authored content.** A small Node script (no dependencies, Node ≥ 18 — already shipped with Claude Code) handles naming, collision, parenting, and tree rendering; the model only writes the snapshot's title and body.
 - **Plain files.** Snapshots are readable, greppable, diffable Markdown. No database, no lock-in — the store is just a folder.
+- **Deterministic mechanics, model-authored content.** A small Node script (no dependencies, Node ≥ 18 — already shipped with Claude Code) handles naming, collision, parenting, and tree rendering; the model only writes the snapshot's title and body.
+- **Zero permission prompts.** All store I/O — listing, reading, writing — flows through the bundled `ocean` command, pre-approved by the skills that use it. Install and go.
 
 For the full design rationale and decision log, see [DESIGN.md](DESIGN.md).
 
