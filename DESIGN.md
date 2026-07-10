@@ -12,11 +12,25 @@ Tre skill thin attorno a un unico script deterministico (`bin/ocean`):
 
 Gli snapshot non sono piatti: ognuno registra il **padre** da cui è stato reidratato → emerge un albero (genealogia).
 
-## Filosofia / problema
+## Identità (testo canonico, 2026-07-10)
+
+Registro: descrizione sobria, impersonale — niente claim, niente "tu". Fonte per README e descrizione marketplace (traduzione inglese da fare al rework del README).
+
+> ocean disidrata una conversazione in uno snapshot, che può essere reidratato in una sessione successiva per riprendere il lavoro da dove era rimasto. Questo permette, tra l'altro, di portare avanti più fronti di lavoro in parallelo senza perdere lo stato di alcuno.
+>
+> Inoltre, quando una conversazione raggiunge uno stato unico e interessante, per sua natura irriproducibile, uno snapshot consente di conservarlo ed eventualmente condividerlo con altri.
+
+Casi d'uso vagliati (2026-07-10): cantieri paralleli (eroe), replay come fixture di test (A/B, regression comportamentale), passaggio di mano (abilitare con un sottocomando `import`), innesto di behaviour su sessione esistente (direzione futura, da progettare — non promessa nei testi pubblici). Scartato: checkpoint assicurativo (lo snapshot non contiene lo stato del codice; coperto da git + /rewind).
+
+## Gerarchia di valore
+
+Il core del plugin è la coppia **dehydrate/rehydrate col menu di scelta**: congelare uno stato, riprenderlo. La genealogia è **marginale**: uno strato di organizzazione dello store al servizio del menu, sostituibile (tag, directory virtuali, gruppi manuali) o rimovibile senza perdere il valore del plugin. Nessuna decisione sul core si giustifica "per servire l'albero".
+
+## Filosofia dello strato genealogia
 
 Il flusso reale dell'utente è una **catena**: `rehydrate A → lavori → dehydrate B → rehydrate B → dehydrate C …`. B continua A, C continua B. Senza registrare questa parentela la lista di `/ocean:rehydrate` è piatta: A/B/C allo stesso livello, rischi di riaprire una tappa morta invece della testa viva, il magazzino si affolla di intermedi indistinguibili.
 
-Requisito portante: la genealogia è **automatica** (l'utente non la dichiara).
+Requisito dello strato, finché esiste: la genealogia è **automatica** (l'utente non la dichiara).
 
 Divisione dei ruoli, invariante in tutto il sistema: **il modello decide il contenuto (giudizio), lo script fa la meccanica (deterministica).** Il modello non ridisegna mai l'albero: lo script consegna testo pre-renderizzato.
 
