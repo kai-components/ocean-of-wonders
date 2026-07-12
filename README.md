@@ -66,4 +66,4 @@ For the full design rationale and decision log, see [DESIGN.md](DESIGN.md).
 
 Created and maintained by [Massimo Santoli](https://github.com/santoli-massimo). Part of [kAI Components](https://github.com/kai-components).
 
-Adapted from the [handoff skill](https://github.com/mattpocock/skills) by Matt Pocock (`skills/productivity/handoff`) — split into dehydrate/rehydrate, reworked around a deterministic script and a persistent per-project store, and grown a genealogy tree.
+Adapted from the [handoff skill](https://github.com/mattpocock/skills) by Matt Pocock (`skills/productivity/handoff`)
