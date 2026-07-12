@@ -2,7 +2,7 @@
 
 *Conversation snapshots for [Claude Code](https://code.claude.com).*
 
-"Ocean of wonders" dehydrates a conversation into a snapshot — a plain Markdown file — which can be rehydrated in a later session to pick the work back up where it left off.
+Dehydrate a conversation into a snapshot — a plain Markdown file — which can be rehydrated in a later session to pick the work back up where it left off.
 And should a conversation reach a unique, interesting state — irreproducible by nature — a snapshot can preserve it. It can then be reused or shared.
 
 Every snapshot joins the ocean — a local, per-project store where they accumulate side by side, none overwriting another.
