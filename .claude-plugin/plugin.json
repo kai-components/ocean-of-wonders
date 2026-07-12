@@ -1,5 +1,6 @@
 {
   "name": "ocean",
-  "version": "0.1.1",
+  "displayName": "Ocean of wonders",
+  "version": "0.1.2",
   "description": "Conversation snapshot store: dehydrate a session into a snapshot, rehydrate it later in a fresh session, browse the snapshot genealogy tree."
 }
